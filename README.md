@@ -1,0 +1,1 @@
+Niniejsze repozytorium przedstawia analice cech pacjentów, które wpływają na wystąpienie udaru. Powstało ono w ramach zajęć z przedmiotu Statystyka matematyczna. Analiza została wykonana za pomocą języka R.
