@@ -1,0 +1,798 @@
+---
+title: "Analiza cech pacjentów, które wpływają na wystąpienie udaru"
+subtitle: "Lab 10"
+author: "Weronika Nadworska"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r}
+library(rstatix)
+library(tables)
+library(rio)
+library(tidyverse)
+library(kableExtra)
+library(mice)
+library(plotrix)
+dane <- import(file="healthcare-dataset-stroke-data.csv", na.strings=c("N/A","NA", "Unknown"), stringsAsFactors = T)
+alfa <- 0.05
+```
+
+## Cel badania
+
+Światowe badania dowiodły, że udar jest drugą najczęstszą przyczyną zgonów na świecie. Pracując na wykorzystywanym zbiorze danych zawierającym różne informacje na temat pacjentów, takich jak płeć, wiek, występowanie chorób współistniejących czy bycie palaczem, postaram się zidentyfikować te cechy, które mają istotny wpływ na wystąpienie u nich udaru.
+
+## Preprocessing
+
+### Opis zbioru badawczego
+
+Zbiór danych można znaleźć pod adresem https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset. Zawiera on dane 5110 pacjentów. Tabelka poniżej przedstawia kilka wierszy tego zbioru.
+
+```{r include=F}
+dane$hypertension <- as.factor(dane$hypertension)
+dane$heart_disease <- as.factor(dane$heart_disease)
+dane$stroke <- as.factor(dane$stroke)
+```
+
+```{r}
+head(dane) %>% kable() %>% kable_styling(full_width = F, bootstrap_options  = "striped")
+```
+
+Jak możemy zauważyć, w zbiorze danych na temat pacjentów zostały przedstawione informacje na temat ich płci, wieku, czy chorują na nadciśnienie, czy mają choroby serca, czy byli kiedykolwiek w związku małżeńskim, jaki mają typ pracy, miejsce zamieszkania, średni poziom glukozy, wskaźnik BMI oraz tego, jak często palą papierosy. Zmienna `stroke` pokazuje, czy pacjent miał udar (wartość 1), czy nie (wartość 0). 
+
+### Statystyki opisowe dla zmiennych numerycznych
+
+```{r}
+summary(dane[,c("age", "avg_glucose_level", "bmi")])
+```
+
+Średni wiek (`age`) badanych pacjentów wynosi około 43 lata. Średni poziom glukozy (`avg_glucose_level`) przyjmuje wartości od 55.12 do 271,74 ze średnią wartością 106.14. Średnia wartość wskaźnika BMI (`bmi`) wynosi 28.89. W kolumnie tej występuje 201 braków danych.
+
+### Liczby wystąpień poszczególnych poziomów dla zmiennych kategorycznych
+
+```{r}
+options(knitr.kable.NA='')
+summary(dane[,c("gender", "hypertension", "heart_disease", "ever_married", "work_type", "Residence_type", "smoking_status", "stroke")]) %>% kable() %>% kable_styling(full_width = F, bootstrap_options  = "striped")
+```
+
+Liczba przebadanych mężczyzn i kobiet jest podobna. W kolumnie z płcią (`gender`) widnieje jedna zmienna `Other`, która zostanie usunięta przed dalszymi analizami. Dla zmiennych `hypertension`, `heart_desease`, `stroke` możliwe są dwa poziomy wystąpień tych cech: 0 - jeśli u pacjenta występowały odpowiednio nadciśnienie, choroby serca oraz udar, oraz 1 - jeśli nie występowały. Zmienna `ever_married` ma możliwe poziomy `Yes` oraz `No` i informuje ona nas czy pacjent był kiedykolwiek w związku małżeńskim. Zmienne `work_type` oraz `smoking_status` przyjmują więcej niż dwa poziomy i informują odpowiednio o typie pracy pacjenta oraz o częstości palenia przez niego papierosów. W tej kolumnie znajduje się również 1544 braków danych.
+
+```{r}
+dane <- dane[!dane$gender=="Other",]
+dane$gender <- droplevels(dane$gender)
+```
+
+```{r}
+dd <- dane %>% 
+  group_by(stroke) %>% 
+  summarise(n=n())
+dd %>% 
+  kable() %>% 
+  kable_styling(full_width = F, bootstrap_options = "striped")
+#dla pacjentów oki, dla naszych badań niekoniecznie, bo chcemy mieć to bardziej zbalansowane
+```
+
+Patrząc na zmienną `stroke` możemy zauważyć, że jedynie 249 pacjentów spośród 5110 przeszło udar. Liczba ta dość znacznie odbiega od liczby osób, które go nie przeszły. Może to mieć zły wpływ na niektóre analizy, ponieważ liczebność tych grup nie jest dobrze zbalansowana.
+
+## Braki danych
+
+Tabela poniżej przedstawia liczbę braków danych w poszczególnych kolumnach zbioru danych.
+
+```{r}
+braki <- colSums(is.na(dane)) 
+braki <- cbind(braki)
+colnames(braki) <- "Liczba braków"
+braki%>% kable() %>% kable_styling(full_width = T, bootstrap_options  = "striped")
+```
+
+Jak widać, braki danych występują jedynie w kolumnach `bmi` oraz `smoking_status`. Pierwsza z nich jest kolumną liczbową i braki danych zostaną w niej zastąpione jej medianą. Druga jest zmienną kategoryczną i braki danych w niej występujące zostaną zastąpione wartością najczęściej występującą.
+
+```{r}
+med <- median(dane$bmi, na.rm=T)
+dane[is.na(dane$bmi),'bmi'] <- med
+```
+
+```{r}
+dane <- DMwR2::knnImputation(dane, k=5, scale = T, meth='pmm')
+```
+
+# Analiza dla zmiennych ilościowych
+
+## Wiek (`age`)
+
+```{r}
+#dla średniej
+alfa <- 0.05
+n <- nrow(dane)
+war <- var(dane$age)
+u <- qnorm(1-alfa/2)
+sr <- mean(dane$age)
+lk <- sr-u*war/sqrt(n)
+pk <- sr+u*war/sqrt(n)
+```
+
+```{r}
+#dla wariancji
+lk2 <- war/(1+u/sqrt(2*n))
+pk2 <- war/(1-u/sqrt(2*n))
+```
+
+Przedział ufności dla średniej wieku ma postać (`r round(lk,2)`, `r round(pk,2)`), a dla wariancji (`r round(lk2,2)`, `r round(pk2,2)`).
+
+Poniżej przedstawione są statystyki opisowe w podziale ze względu na zmienną `stroke`.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(Mean=mean(age), Var=var(age), Min=min(age), Q1=quantile(age, 0.25), sd=sd(age), Q3=quantile(age, 0.75), Max=max(age), V=sd(age)/mean(age)*100, n=n()) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped")
+```
+
+Z tabeli powyżej możemy zauważyć, że średnia wieku w grupie bez udaru wynosi około 42, a w grupie z udarem ponad 67. Dla grupy kontrolnej współczynnik zmienności wieku wynosi około 53%, czyli zmiennośc jest średnia. Dla grupy z udarem ta wartość wynoi niecałe 19%, a więc zmienność wieku jest mała w tej grupie.
+
+```{r}
+dane %>% 
+  ggplot(aes(x=age, fill=stroke))+
+  geom_histogram()
+
+dane %>% 
+  ggplot(aes(x=age, fill=stroke))+
+  geom_density(alpha=0.4)+
+  ggtitle("Rozkład wieku w podziale na pacjentów w grupach bez udaru i z udarem")
+```
+
+w grupie pacjentów z udarem częściej pojawiają się pacjenci starsi, niż ma to miejsce w grupie kontrolnej (bez udaru). Patrząc na wykres, można zauważyć, że dla grupy z udarem typowe wartości wieku zaczynają się od około 60 lat, podczas gdy dla grupy kontrolnej (control) typowy wiek mieści się w przedziale od 20 do 60.
+
+Poniżej przedstawiony został test czy rozkład zmiennej `age` jest normalny w podziale na grupy pacjentów.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(statistic=shapiro.test(age)$statistic,
+            p.value=shapiro.test(age)$p.value) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+W obu grupach wartość p-value jest bardzo bliska zeru, zatem należy odrzucić hipotezę o normalności rozkładu wieku w grupach.
+
+Przeprowadzono również test o równości wariancji wieku w obu grupach.
+
+$H_0$: Wariancja wieku jest taka sama dla pacjentów z udarem i bez udaru,
+$H_1$: Wariancja wieku jest różna dla pacjentów z udarem i bez udaru.
+
+```{r}
+var.test(dane[dane$stroke==0,"age"],dane[dane$stroke==1,"age"])
+```
+
+Odrzucamy hipotezę zerową na korzyść alternatywnej, zatem wariancje wieku pacjentów z udarem i bez udaru różnią się.
+
+Odpowiednim testem do sprawdzenia hipotezy o równości średniej w obu grupach byłby test Manna-Whitneya, jednak powodu dużej liczebności próby zdecydowano się użyć jednak testu T, mimo braku normalności.
+
+```{r}
+t.test(dane[dane$stroke==0, 'age'], dane[dane$stroke==1, 'age'],var.equal=F)
+```
+
+P-value bardzo bliskie zeru, co sprowadza nas do odrzucienia hipotezy o równości średniej wieku w grupach pacjentów z udarem i bez udaru. Zatem wiek ma wpływ na przejście udaru przez pacjenta. Pacjenci starsi mają większą szansę na przejście udaru.
+
+
+## Średni poziom glukozy (`avg_glucose_level`)
+
+
+```{r}
+#dla średniej
+alfa <- 0.05
+n <- nrow(dane)
+war <- var(dane$avg_glucose_level)
+u <- qnorm(1-alfa/2)
+sr <- mean(dane$avg_glucose_level)
+lk5<- sr-u*war/sqrt(n)
+pk5 <- sr+u*war/sqrt(n)
+
+```
+
+```{r}
+#dla wariancji
+lk6 <- war/(1+u/sqrt(2*n))
+pk6 <- war/(1-u/sqrt(2*n))
+
+```
+
+Przedział ufności dla średniej średniego poziomu glukozy ma postać (`r round(lk5,2)`, `r round(pk5,2)`), a dla wariancji (`r round(lk6,2)`, `r round(pk6,2)`).
+
+Tabela poniżej przedstawia statystyki opisowe w podziale ze względu na zmienną `stroke`.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(Mean=mean(avg_glucose_level), Var=var(avg_glucose_level), Min=min(avg_glucose_level), Q1=quantile(avg_glucose_level, 0.25), sd=sd(avg_glucose_level), Q3=quantile(avg_glucose_level, 0.75), Max=max(avg_glucose_level),  V=sd(avg_glucose_level)/mean(avg_glucose_level)*100, n=n()) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped")
+```
+
+Możemy zauważyć, że średnie poziomy glukozy u pacjentów z udarem i bez udaru wynoszą odpowiednio 104.79 oraz 132.55. Dla grupy kontrolnej współczynnik zmienności wieku wynosi około 42%, a dla grupy z udarem ta wartość wynosi niecałe około 47%, zatem w obu grupach zmienność średniego poziomu glukozy jest średnia i na podobnym poziomie.
+
+```{r}
+dane %>% 
+  ggplot(aes(x=avg_glucose_level, fill=stroke))+
+  geom_density(alpha=0.4)+
+  ggtitle("Rozkład średniego poziomu glukozy w podziale na pacjentów w grupach bez udaru i z udarem")
+```
+
+Patrząc na powyższy wykres, możemy zauważyć, że w grupie pacjentów, którzy nie przeszli udaru częściej pojawiają się pacjenci ze średnim niższym poziomem cukru. Z wykresu gęstości wynika również, że średnio osoby, które przeszły udar miały nieco wyższy średni poziom glukozy.
+
+Poniżej przeprowadzony został test czy rozkład zmiennej `avg_glucose_level` jest normalny w podziale na grupy pacjentów.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(statistic=shapiro.test(avg_glucose_level)$statistic,
+            p.value=shapiro.test(avg_glucose_level)$p.value) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+W obu grupach wartość p-value jest bardzo bliska zeru, zatem należy odrzucić hipotezę o normalności rozkładu średniego poziomu glukozy w grupach.
+
+Przeprowadzono również test o równości wariancji tej cechy w obu grupach.
+
+$H_0$: Wariancja średniego poziomu glukozy jest taka sama dla pacjentów z udarem i bez udaru,
+$H_1$: Wariancja średniego poziomu glukozy jest różna dla pacjentów z udarem i bez udaru.
+
+```{r}
+var.test(dane[dane$stroke==0,"avg_glucose_level"],dane[dane$stroke==1,"avg_glucose_level"])
+```
+
+Wartość p-value bardzo bliska 0, zatem odrzucamy hipotezę zerową na korzyść hipotezy alternatywnej. Stąd wariancje średniego poziomu cukru pacjentów z udarem i bez udaru różnią się.
+
+Przeprowadzono również test T aby sprawdzić hipotezy o równości średniej w obu grupach.
+
+```{r}
+t.test(dane[dane$stroke==0, 'avg_glucose_level'], dane[dane$stroke==1, 'avg_glucose_level'],var.equal=F)
+```
+
+Test odrzuca hipotezę o równości średnich poziomów glukozy u pacjentów z udarem i bez udaru.
+
+## BMI
+
+```{r}
+#dla średniej
+alfa <- 0.05
+n <- nrow(dane)
+war <- var(dane$bmi)
+u <- qnorm(1-alfa/2)
+sr <- mean(dane$bmi)
+lk12<- sr-u*war/sqrt(n)
+pk12 <- sr+u*war/sqrt(n)
+
+```
+
+```{r}
+#dla wariancji
+lk14 <- war/(1+u/sqrt(2*n))
+pk14 <- war/(1-u/sqrt(2*n))
+
+```
+
+Przedział ufności dla średniej warrości współczynnika BMI ma postać (`r round(lk12,2)`, `r round(pk12,2)`), a dla wariancji (`r round(lk14,2)`, `r round(pk14,2)`).
+
+Tabela poniżej przedstawia statystyki opisowe w podziale ze względu na zmienną `stroke`.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(Mean=mean(bmi), Var=var(bmi), Min=min(bmi), Q1=quantile(bmi, 0.25), sd=sd(bmi), Q3=quantile(bmi, 0.75), Max=max(bmi),V=sd(bmi)/mean(bmi)*100, n=n()) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped")
+```
+
+Możemy zauważyć, że średnie poziomy wskaźnieka BMI pacjentów z udarem i bez udaru wynoszą odpowiednio prawie 29 oraz 30, zatem nieznacznie się one róznią. Dla grupy kontrolnej współczynnik zmienności tego wskaźnika wynosi około 27%, a dla grupy z udarem ta wartość wynosi niecałe 20%, zatem w obu grupach zmienność wskaźnieka BMI nie jest duża i jest do siebie zbliżona.
+
+```{r}
+plot(density(dane$bmi[dane$stroke==1]), col="#ee5e5e", main="Rozkład wieku w podziale na pacjentów bez udaru i z udarem")
+lines(density(dane$bmi[dane$stroke==0]), col="#7777D9")
+legend("topleft", legend=c("control", "stroke"), col=c("#7777D9", "#ee5e5e"), lty=1)
+```
+
+Poniższy wykres boxplot również pozwala zauważyć, że wartość współczynnika BMI jest zbliżona w obu grupach. Sporo jest wartości odstajacych w grupie osób, które nie przeszły udaru. Wartości mediany są bardzo zbliżone.
+
+```{r}
+dane %>% 
+  ggplot(aes(x=bmi, fill=stroke))+
+  geom_boxplot()
+```
+
+Przeprowadzimy test sprawdzajacy czy rozkład badanej zmiennej jest normalny w podziale na grupy pacjentów.
+
+```{r}
+dane %>% 
+  group_by(stroke) %>% 
+  summarise(statistic=shapiro.test(bmi)$statistic,
+            p.value=shapiro.test(bmi)$p.value) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+Wartosć p-value jest bardzo bliska zeru. Zatem rozkład wskaźnieka BMI w podziale na pacjentów z udarem i bez nie jest rozkładem normalnym.
+
+Sprawdzimy teraz hipotezę o równości wariancji w obu grupach.
+
+$H_0$: Wariancja wskaźnieka BMI jest taka sama dla pacjentów z udarem i bez udaru,
+$H_1$: Wariancja wskaźnieka BMI jest różna dla pacjentów z udarem i bez udaru.
+
+```{r}
+var.test(dane[dane$stroke==0,"bmi"],dane[dane$stroke==1,"bmi"])
+```
+
+Odrzucamy hipotezę zerową na korzyść alternatywnej ze względu na p-value bliskie zeru. Zatem wariancje wieku pacjentów z udarem i bez udaru różnią się.
+
+Testem T sprawdzimy hipotezy o równości średniej w obu grupach.
+
+```{r}
+t.test(dane[dane$stroke==0, 'bmi'], dane[dane$stroke==1, 'bmi'],var.equal=F)
+```
+
+P-value biskie zeru, zatem średnia wartosć wskaźnieka BMI nie jest taka sama w obu grupach. Pacjenci z wyższym wskaźnikiem BMI mogą mieć większą szansę na przejście udaru.
+
+
+# Analiza dla zmiennych kategorycznych
+
+### Nadciśnienie
+
+```{r}
+#hypertension<-
+m <- length(dane[dane$hypertension==1, "hypertension"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk20 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk20 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów z nadciśnieniem w całym zbiorze danych ma postać (`r round(lk20, 2)`, `r round(pk20,2)`). Takich pacjentów jest więc około 9-10 procent w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Hypertension` = dane$hypertension) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+Zatem pacjentów, którzy mają nadciśnienie (`hypertension`) i przeszli udar jest 26.5%, zaś tych, którzy nie mają tej choroby i przeszli udar jest 73.5%.
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$hypertension, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#00FFFF','#FF0000'), main=paste("Procentowy rozkład osób z nadciśnieniem", "\n", "wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("hypertension","no hypertension"), fill=c('#FF0000', '#00FFFF'), inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `hypertension` w podziale na pacjentów z udarem i bez. W grupie bez udaru pacjenci z nadciśnieniem stanowią niecałe 9%. Wśród pacjentów z udarem chorzy na nadciśnienie stanowią 26.5% grupy. Odsetek pacjentów z nadciśnieniem wydaje się więc wyższy w grupie pacjentów z udarem.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób chorych na nadciśnienie jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób z nadciśnieniem w grupie bez udaru, 
+$p_2$ - frakcja osób z nadciśnieniem w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$hypertension==1,] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$hypertension==1,] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-9.14
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem odrzucamy hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów z nadciśnieniem jest istotnie większy w grupie z udarem niż bez udaru.
+
+### Choroby serca
+
+```{r}
+#heart_disease<-
+#przedział ufności dla frakcji pacjentów z chorobami serca
+m <- length(dane[dane$heart_disease==1, "heart_disease"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk21 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk21 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów z nadciśnieniem w całym zbiorze danych ma postać (`r round(lk21, 2)`, `r round(pk21,2)`). Takich pacjentów jest więc około 4-6% w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Heart_disease` = dane$heart_disease) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+Zatem pacjentów, którzy mają choroby serca (`heart_desease`) i przeszli udar jest niecałe 19%, zaś tych, którzy nie mają problemów z sercem i przeszli udar jest około 81%.
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$heart_disease, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#4682B4','#0000FF'), main=paste("Procentowy rozkład osób z chorobami serca", "\n", "wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("heart disease","no heart disease"), fill=c('#4682B4', '#0000FF'),inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `heart_desease` w podziale na pacjentów z udarem i bez. W grupie bez udaru pacjenci z chorobami serca stanowią niecałe 5%. Wśród pacjentów z udarem tacy pacjenci stanowią prawie 19% grupy. Odsetek pacjentów z chorobami serca wydaje się więc być wyższy w grupie pacjentów z udarem.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób posiadających choroby serca jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób posiadających choroby serca w grupie bez udaru, 
+$p_2$ - frakcja osób nie mających chorób serca w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$
+$H_1: p_1 < p_2$
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$heart_disease==1,] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$heart_disease==1,] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-9.64
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem odrzucamy hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów z chorobami serca jest istotnie większy w grupie z udarem niż bez udaru.
+
+
+### Będący kiedykowiek w związku małżeńskim
+
+```{r}
+#ever_married<-
+#przedział ufności dla frakcji pacjentów żonatych/zamężnych
+m <- length(dane[dane$ever_married=="Yes", "ever_married"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk26 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk26 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów będących kiedykolwiek w związku małżeńskim w całym zbiorze danych ma postać (`r round(lk26, 2)`, `r round(pk26,2)`). Takich pacjentów jest więc około 64-67% w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Ever_married` = dane$ever_married) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$ever_married, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#F0E68C','#FFD700'), main=paste("Procentowy rozkład osób będących kiedykolwiek w związku", "\n", "małżeńskim wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("never married","ever married"), fill=c('#F0E68C', '#FFD700'),inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `ever_married` w podziale na pacjentów z udarem i bez. W grupie bez udaru pacjenci z kiedykolwiek będący w zwiazku małżeńskim stanowią prawie 65%. Wśród pacjentów z udarem tacy pacjenci stanowią prawie 90% grupy.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób kiedykolwiek będacych w zwiazku małżeńskim jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób będacych kiedykolwiek w zwiazku małżeńskim w grupie bez udaru, 
+$p_2$ - frakcja osób nie będacych kiedykolwiek w zwiazku małżeńskim w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$ever_married=="Yes",] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$ever_married=="Yes",] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-7.74
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów będących kiedykolwiek w zwiazku małżeńskim jest większy w grupie z udarem niż bez udaru.
+
+
+### Miejsce zamieszkania
+
+```{r}
+#Residence_type<-
+#przedział ufności dla frakcji pacjentów zamieszkałych w mieście
+m <- length(dane[dane$Residence_type=="Urban", "Residence_type"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk28 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk28 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów zamieszkałych w mieście w całym zbiorze danych ma postać (`r round(lk28, 2)`, `r round(pk28,2)`). Takich pacjentów jest więc około 49-52% w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Residence_tyoe` = dane$Residence_type) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+Zatem liczba pacjentów zamieszkałych w mieście, jak i na wsi, zarówno tych, którzy przeszli udar, jak i nie, wynosi około 50% w obu grupach.
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$Residence_type, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#8B4513','#FFDEAD'), main=paste("Procentowy rozkład osób ze względu na miejsce zamieszkania", "\n", "wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("rural","urban"), fill=c('#8B4513','#FFDEAD'), inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `Residence_type` w podziale na pacjentów z udarem i bez.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób mieszkajacych w mieście jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób mieszkających w mieście w grupie bez udaru, 
+$p_2$ - frakcja osób mieszkających w mieście w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$Residence_type=="Urban",] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$Residence_type=="Urban",] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-1.1
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów mieszkających w mieście jest większy w grupie z udarem niż bez udaru, jednak jest to nieznaczna różnica.
+
+
+### Typ pracy
+
+```{r}
+#work_type<-
+#przedział ufności dla frakcji pacjentów zatrudnionych w prywatnych przediębiorstwach
+m <- length(dane[dane$work_type=="children", "work_type"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk30 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk30 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów będących dziecmi w całym zbiorze danych ma postać (`r round(lk30, 2)`, `r round(pk30,2)`). Takich pacjentów jest więc około 13-14% w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Work_type` = dane$work_type) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+Zarówno w grupie pacjentów z udarem, jak i bez, odsetki poszczególnych poziomów zmiennej `work_type` są do siebie zbliżone. 
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$work_type, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#696969','#808080','#A9A9A9','#D3D3D3','#FFFFF0'), main=paste("Procentowy rozkład osób ze względu na typ pracy", "\n", "wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("self-employed","private","never_worked","gotvt_job","children"), fill=c('#696969','#808080','#A9A9A9','#D3D3D3','#FFFFF0'),inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `work_type` w podziale na pacjentów z udarem i bez.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób samozatrudnionych jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób samozatrudnionych w grupie bez udaru, 
+$p_2$ - frakcja osób samozatrudnionych w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$work_type=="Self-employed",] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$work_type=="Self-employed",] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-4.44
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów zamozatrudnionych jest większy w grupie z udarem niż bez udaru.
+
+
+### Częstość palenia papierosów
+
+```{r}
+#smoking_status<-
+#przedział ufności dla frakcji pacjentów będących palaczami
+m <- length(dane[dane$smoking_status=="smokes", "smoking_status"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk32 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk32 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów palących papierosy w całym zbiorze danych ma postać (`r round(lk32, 2)`, `r round(pk32,2)`). Takich pacjentów jest więc około 44-47% w całym zbiorze danych.
+
+Tabela ponizej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Smoking_status` = dane$smoking_status) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$smoking_status, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#008B8B','#20B2AA','#AFEEEE'), main=paste("Procentowy rozkład osób ze względu na częstość", "\n", "palenia papierosów wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("formerly smoked","never smoked", "smokes"), fill=c('#008B8B','#20B2AA','#AFEEEE'),inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `smoking_status` w podziale na pacjentów z udarem i bez. W grupie bez udaru pacjenci niepalący stanowią nieco ponad 50% grupy. Wśród pacjentów z udarem tacy pacjenci stanowią niecałe 45%.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób palących papierosy jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób palących w grupie bez udaru, 
+$p_2$ - frakcja osób palących w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$smoking_status=="smokes",] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$smoking_status=="smokes",] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #3.22
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa nie należy do zbioru krytycznego. Zatem nie mamy podstaw do odrzucenia hipotezy zerowej. Stąd odsetek pacjentów palących papierosy jest zbliżony w grupie z udarem i bez udaru.
+
+
+### Płeć
+
+```{r}
+#gender
+#przedział ufności dla frakcji pacjentów będących mężczyznami
+m <- length(dane[dane$gender=="Male", "gender"])
+n <- nrow(dane)
+alfa <- 0.05
+u <- qnorm(1-alfa/2)
+lk45 <- m/n-u*sqrt(m/n*(1-m/n)/n)
+pk45 <- m/n+u*sqrt(m/n*(1-m/n)/n)
+```
+
+Przedział ufności dla frakcji pacjentów będących mężczyznami w całym zbiorze danych ma postać (`r round(lk45, 2)`, `r round(pk45,2)`). Takich pacjentów jest więc około 40-43% w całym zbiorze danych.
+
+Tabela poniżej przedstawia procentowy udział poszczególnych poziomów badanej zmiennej w grupach z udarem
+i bez udaru.
+
+```{r}
+tabelka <- tabular((`Gender` = dane$gender) ~ Format(digits =2) * (`Stroke` = dane$stroke)*Heading()*Percent("col"))
+ toKable(tabelka, format = "html") %>%
+   kable_styling(full_width = F)
+```
+
+```{r}
+par(mar=c(5.1, 5.1, 5.1, 10), xpd=TRUE)
+ptab <- prop.table(table(dane$gender, dane$stroke), margin = 2)
+ptab <- round(ptab, 3)*100
+bar <- barplot(ptab, col=c('#228B22','#9ACD32'), main=paste("Procentowy rozkład osób ze względu na płeć", "\n", "wśród pacjentów bez udaru i z udarem"), xlab="stroke", ylab="%")
+legend("topright", legend=c("male","female"), fill=c('#228B22', '#9ACD32'),inset=c(-0.5,0))
+barlabels(bar,ptab)
+```
+
+Wykres powyżej przedstawia rozkład poszczególnych poziomów zmiennej `gender` w podziale na pacjentów z udarem i bez. W grupie bez udaru pacjenci będący mężczyznami stanowią nieco ponad 41%. Wśród pacjentów z udarem tacy pacjenci stanowią 43.4% grupy.
+
+Przeprowadzimy test mający na celu sprawdzenie, czy proporcja osób będących mężczyznami jest taka sama w grupach z udarem i bez.
+
+Niech 
+$p_1$ - frakcja osób będących mężczyznami w grupie bez udaru, 
+$p_2$ - frakcja osób będących mężczyznami w grupie z udarem. 
+Testujemy hipotezy:
+$H_0: p_1 = p_2$,
+$H_1: p_1 < p_2$.
+
+```{r}
+alfa <- 0.05
+m1 <- dane[dane$stroke==0 & dane$gender=="Male",] %>% nrow()
+m2 <- dane[dane$stroke==1 & dane$gender=="Male",] %>% nrow()
+n1 <- dane[dane$stroke==0,] %>% nrow()
+n2 <- dane[dane$stroke==1,] %>% nrow()
+p1 <- m1/n1
+p2 <- m2/n2
+p <- (m1+m2)/(n1+n2)
+n <- n1*n2/(n1+n2)
+U <- (p1-p2)/sqrt(p*(1-p)/n) #-0.65
+kw <- qnorm(1-alfa/2) #1.96
+```
+
+Statystyka testowa ma wartość `r round(U,2)`. Zbiór krytyczny ma postać $(-\infty, -$ `r round(kw, 2)` $]$. Statystyka testowa należy do zbioru krytycznego. Zatem odrzucamy hipotezę zerową na korzyść alternatywnej. Stąd odsetek pacjentów będących mężczyznami jest większy w grupie z udarem niż bez udaru, jednak jest to nieznaczna różnica.
+
+# Wnioski
+
+Na podstawie przeprowadzonych analiz i testów, możemy wysnuć następujące wnioski:
+
+1. Wiek może być cechą, która istotnie wpływa na wystąpienie udaru u pacjenta. W grupie pacjentów z udarem typowe wartości wieku są znacznie wyższe niż w grupie bez udaru.
+
+2. Chorowanie na nadcisnienie może mieć wpływ na wystąpienie udaru u pacjenta. W grupie pacjentów z udarem i bez, pojawiły się istotne różnice dla pacjentów chorych na nadcisnienie oraz zdrowych pod kątem tej choroby.
+
+3. Pacjenci będący kiedykolwiek w związku małżeńskim wśród pacjentów z udarem stanowili spory odsetek, jednak w grupie bez udaru ten odsetek również był dosć duży, zatem cecha ta nie powinna mieć dużego wpływu na przejscie udaru przez pacjenta.
+
+4. Częstość palenia papierosów nie wydaje się być cechą mającą istotny wpływ na przejście udaru.
+
+5. Typ pracy nie ma istotnego wpływu na wystąpienie udaru u pacjenta.
+
+6. Miejsce zamieszkania niekoniecznie jest cechą istotnie wpływającą na przejście udaru. Rozkład tej cechy w obu grupach z udarem i bez nie różni się w nich istotnie.
+
+7. Nie wydaje się, aby średni poziom glukozy był cechą istotną przy możliwości przejścia udaru.
+
+8. Wskaźnik BMI może być cechą, która wpływa na przejscie udaru.
+
+9. Płeć prawdopodobnie nie jest czynnikiem wpływającym na wystąpienie udaru u pacjenta. Struktura płci nie różni się istotnie pomiędzy grupami pacjentów z udarem i bez.
